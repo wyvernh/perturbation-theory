@@ -1,0 +1,477 @@
+#+title: Perturbation Theory
+#+author: Matthew Hinton
+#+date: 2026/06/04
+
+* Symbolically do the Dyson series integral
+
+#+begin_src python :session perturbation_theory :results output
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import sympy as sp
+
+  image_dir = 'images/perturbation_theory/'
+
+  def compute_I_n(n, degeneracies=None):
+      '''
+      Computes the integral from the Dyson series.
+
+      n: The order of the term
+      degeneracies: A dictionary mapping equal energies E_mk, for example {E_m1: E_psi}
+
+      Returns: A sympy expression for the evaluated integral
+      '''
+
+      if n < 1:
+          raise ValueError("n must be at least 1")
+
+      # Define the main symbols
+      T = sp.Symbol('T', real=True, positive=True)
+      s = sp.Symbol('s')
+      E_psi = sp.Symbol('E_psi', real=True)
+
+      # Define the list of intermediate energies E_{m_1} to E_{m_{n-1}}
+      E_m = [sp.Symbol(f'E_m{k}', real=True) for k in range(1, n)]
+
+      # Construct the Laplace transform of I_n
+      # F(s) = 1 / ( (s+iE_psi)^2 \Prod_j(s+iE_{m_j}) )
+      F_s = 1 / (s + sp.I*E_psi)**2
+      for E_mk in E_m:
+          F_s /= (s + sp.I*E_mk)
+
+      # Apply known degeneracies
+      if degeneracies:
+          F_s = F_s.subs(degeneracies)
+
+      # Identify all the poles
+      poles = [-sp.I*E_psi, -sp.I*E_psi]
+      for E_mk in E_m:
+          pole = -sp.I*E_mk
+          if degeneracies:
+              pole = pole.subs(degeneracies)
+          poles.append(pole)
+
+      # Deduplicate poles
+      unique_poles = list(set(poles))
+
+      # Inverse Laplace transform
+      integrand = F_s * sp.exp(s * T)
+      I_n = 0
+      for p in unique_poles:
+          # m is the multiplicity of the pole
+          m = poles.count(p)
+          term = integrand * ((s-p)**m)
+
+          # Take the (m-1)th derivative
+          if m > 1:
+              term = sp.diff(term, s, m-1)
+
+          # Take the limit s --> p
+          residue = (1 / sp.factorial(m-1)) * term.subs({s: p})
+
+          I_n += residue
+
+      return I_n
+
+  def get_callable_I_n(n, expr):
+      # Define the main symbols
+      T = sp.Symbol('T', real=True, positive=True)
+      E_psi = sp.Symbol('E_psi', real=True)
+
+      # Define the list of intermediate energies E_{m_1} to E_{m_{n-1}}
+      E_m = [sp.Symbol(f'E_m{k}', real=True) for k in range(1, n)]
+
+      return sp.lambdify([T, E_psi, E_m], expr)
+
+  E_psi = sp.Symbol('E_psi', real=True)
+  E_m1 = sp.Symbol('E_m1', real=True)
+  I_4 = compute_I_n(6, degeneracies={E_m1: E_psi})
+
+  I_4_callable = get_callable_I_n(6, I_4)
+  print(I_4_callable(1, 0, [3, 4, 5, 6, 7]))
+
+  f = lambda T: np.abs(I_4_callable(T, 0, [0.2, 0.3, 0.4, 0.5, 0.6]))
+  tvals = np.linspace(0, 3)
+  fvals = np.array(list(map(f, tvals)))
+
+  #plt.plot(tvals, fvals)
+
+  print(fvals)
+#+end_src
+
+* Create a table of lambdas for the Dyson integrals
+
+This code block declares the callable_I_n table. Each entry in this table is a dictionary assigning an I_n callable to a number denoting the number d of degeneracies, which are always assumed to be first d energies in the list argument of the callable. For instance, the key '2' for n=3 is the key for a callable where the degeneracy E_m1 = E_m2 = E_psi was applied.
+
+#+begin_src python :session perturbation_theory :results output
+  callable_I_n_table = {
+      1: {0: get_callable_I_n(1, compute_I_n(1))}, # The unique I_1 callable
+      2: {0: get_callable_I_n(2, compute_I_n(2)),
+          1: get_callable_I_n(2, compute_I_n(2, {E_m1: E_psi}))}
+  }
+#+end_src
+
+This code block implements functions to manipulate the callable_I_n table.
+
+#+begin_src python :session perturbation_theory :results output
+  def dict_union_from_ch_tuple(ch_tuple, basic_dict_list, n):
+      dictionary = {}
+      for i in range(n-1):
+          if ch_tuple[i]:
+              dictionary = dictionary | basic_dict_list[i]
+      return dictionary
+
+  def get_degeneracy_dict(i):
+      E_psi = sp.Symbol('E_psi', real=True)
+      E_m = [sp.Symbol(f'E_m{k}', real=True) for k in range(1, i+1)]
+      ddict = {}
+      for E_mk in E_m:
+          ddict[E_mk] = E_psi
+      return ddict
+
+  def add_order_to_callable_I_n_table(n):
+      callable_dictionary = {}
+      for i in range(n):
+          ddict = get_degeneracy_dict(i)
+          I_n = compute_I_n(n, degeneracies=ddict)
+          callable_dictionary[i] = get_callable_I_n(n, I_n)
+      callable_I_n_table[n] = callable_dictionary
+
+  add_order_to_callable_I_n_table(3)
+  print(callable_I_n_table)
+#+end_src
+
+This is an outdated code block from when the dictionaries in the callable_I_n table were indexed by tuples denoting which eigenvalues were degenerate.
+
+#+begin_src python :session perturbation_theory :results output
+  def inc_characteristic_tuple(t, n):
+      carry = True
+      t = list(t)
+      for i in range(n-1):
+          ti = t[i]
+          t[i] = ti ^ carry
+          carry = ti and carry
+          if not carry:
+              break
+      return tuple(t)
+
+  def dict_union_from_ch_tuple(ch_tuple, basic_dict_list, n):
+      dictionary = {}
+      for i in range(n-1):
+          if ch_tuple[i]:
+              dictionary = dictionary | basic_dict_list[i]
+      return dictionary
+
+  def get_degeneracy_dicts(n):
+      E_psi = sp.Symbol('E_psi', real=True)
+      E_m = [sp.Symbol(f'E_m{k}', real=True) for k in range(1, n)]
+      # Create a list of single-entry dictionaries.
+      # Other dictionaries will be unions of these.
+      basic_dict_list = [{E_mk: E_psi} for E_mk in E_m]
+      ch_tuple = (False,) * (n-1)
+      dict_list = [(ch_tuple, {})]
+      while ch_tuple != (True,) * (n-1):
+          ch_tuple = inc_characteristic_tuple(ch_tuple, n)
+          dict_list.append((ch_tuple, dict_union_from_ch_tuple(ch_tuple, basic_dict_list, n)))
+      return dict_list
+
+  # Use wisely. The I_n table must be kept in order.
+  def add_order_to_callable_I_n_table(n):
+      callable_dictionary = {}
+      degeneracy_dicts = get_degeneracy_dicts(n)
+      for ch_tuple,ddict in degeneracy_dicts:
+          I_n = compute_I_n(n, degeneracies=ddict)
+          I_n_callable = get_callable_I_n(n, I_n)
+          callable_dictionary[ch_tuple] = I_n_callable
+      callable_I_n_table[n] = callable_dictionary
+
+  add_order_to_callable_I_n_table(3)
+  print(callable_I_n_table)
+#+end_src
+
+* Define operators.
+
+Basic operators we will need.
+
+#+begin_src python :session perturbation_theory :results output
+  fock_size = 100
+
+  annihilation = np.zeros((fock_size, fock_size), dtype=complex)
+  creation = np.zeros((fock_size, fock_size), dtype=complex)
+  fock_ident = np.zeros((fock_size, fock_size), dtype=complex)
+
+  fock_ident[0,0] = 1
+  for i in range(fock_size)[1:]:
+      annihilation[i-1,i] = np.sqrt(i)
+      creation[i,i-1] = np.sqrt(i)
+      fock_ident[i,i] = 1
+
+  number = creation @ annihilation
+
+  sigma_x = np.array([
+      [0, 1],
+      [1, 0]
+  ], dtype=complex)
+  sigma_y = np.array([
+      [0, -1j],
+      [1j, 0]
+  ], dtype=complex)
+  sigma_z = np.array([
+      [1, 0],
+      [0, -1]
+  ], dtype=complex)
+
+  sigma_p = np.array([
+      [0, 1],
+      [0, 0]
+  ], dtype=complex)
+  sigma_m = np.array([
+      [0, 0],
+      [1, 0]
+  ], dtype=complex)
+
+  spin_ident = np.array([
+      [1, 0],
+      [0, 1]
+  ], dtype=complex)
+
+  spin_up = np.array([
+      [1, 0],
+      [0, 0]
+  ])
+  spin_down = np.array([
+      [0, 0],
+      [0, 1]
+  ])
+#+end_src
+
+Full Hilbert space operators.
+
+#+begin_src python :session perturbation_theory :results output
+  def hamiltonian_0(A1, A2, B):
+      A1, A2, B = complex(A1), complex(A2), complex(B)
+      M1 = A1.conjugate() * np.kron(sigma_m, creation)  +  A1 * np.kron(sigma_p, annihilation)
+      M2 = A2.conjugate() * np.kron(sigma_m, creation @ creation)  +  A2 * np.kron(sigma_p, annihilation @ annihilation)
+      Mb = B.conjugate() * np.kron(sigma_m, fock_ident) + B * np.kron(sigma_p, fock_ident)
+      return M1 + M2 + Mb
+
+  # There are ten Hermitian perturbations I want to consider, which come from nonzero chi^(3) or imperfect phase matching in the nonlinear optics implementation:
+  # [ a^d a,     sigma_z,          a^d + a,       (a^d)^2 + a^2,  (a^d)^2 a + a^d a^2,
+  #   (a^d a)^2, (a^d + a)sigma_z, a^d a sigma_z, spin_up,        a^d a spin_up ]
+  hermitian_perturbation_ops = [
+      np.kron(spin_ident, number),
+      np.kron(sigma_z, fock_ident),
+      np.kron(spin_ident, creation + annihilation),
+      np.kron(spin_ident, creation @ creation + annihilation @ annihilation),
+      np.kron(spin_ident, creation @ number + number @ annihilation),
+      np.kron(spin_ident, number @ number),
+      np.kron(sigma_z, creation + annihilation),
+      np.kron(sigma_z, number),
+      np.kron(spin_up, fock_ident),
+      np.kron(spin_up, number)
+  ]
+
+  # These perturbations encode more general system environment interactions
+  non_hermitian_perturbation_ops = [
+      np.kron(spin_ident, annihilation),
+      np.kron(spin_ident, creation),
+      np.kron(spin_ident, annihilation @ annihilation),
+      np.kron(spin_ident, creation @ creation),
+      np.kron(sigma_m, fock_ident),
+      np.kron(sigma_p, fock_ident)
+  ]
+
+  # This is a correction that Jesse mentioned could be interesting to study.
+  # It counteracts the effect of (a^d a sigma_z) by subtracting off <a^d a>\sigma_z
+  # assuming the system is in the topological state
+  def tuned_sigma_z_perturbation(A2, B_mag):
+      return np.kron(sigma_z, number - (B_mag/A2)*fock_ident)
+#+end_src
+
+* Solve the unperturbed system.
+
+Here we construct a function to generate the wavefunctions of coherent states. In doing so we define a useful wavefunction normalisation function.
+
+#+begin_src python :session perturbation_theory :results output
+  def normalised_wavefunc(wavefunc):
+      norm = sum(wavefunc * wavefunc.conj())
+      return wavefunc / np.sqrt(norm)
+
+  def coherent_spin_down(alpha):
+      wavefunc = np.zeros(2*fock_size, dtype=complex)
+      wavefunc[fock_size] = 1
+      for n in range(1, fock_size):
+          wavefunc[fock_size + n] = wavefunc[fock_size + n - 1] * alpha / np.sqrt(n)
+      return normalised_wavefunc(wavefunc)
+#+end_src
+
+This code block needs to find all the eigenstates of the unperturbed Hamiltonian, discard the artifical states at the edge of the Fock lattice, and choose a pair of orthogonal topological states. The topological subspace is found from the analytical coherent state solutions.
+
+#+begin_src python :session perturbation_theory :results output
+  import cmath
+
+  A1 = 1
+  A2 = 0.2
+  B = 5
+
+  sqrt_discriminant = cmath.sqrt(A1**2/(4*A2**2) - B/A2)
+  alpha_topological_1 = - A1/(2*A2) + sqrt_discriminant
+  alpha_topological_2 = - A1/(2*A2) - sqrt_discriminant
+
+  topological_wavefunc_1 = coherent_spin_down(alpha_topological_1)
+  topological_wavefunc_2 = coherent_spin_down(alpha_topological_2)
+
+  # Orthogonalise the second topological state to the first
+  projection_2_1 = np.vdot(topological_wavefunc_1, topological_wavefunc_2) * topological_wavefunc_1
+  topological_wavefunc_2 = normalised_wavefunc(topological_wavefunc_2 - projection_2_1)
+
+  H_0 = hamiltonian_0(A1, A2, B)
+  energies, eigenstates = np.linalg.eigh(H_0)
+
+  def is_topological_state_index(ind):
+      if np.abs(energies[ind]) >= 1e-9:
+          return False
+      return True
+
+  # Find the indices of the topological states
+  topological_state_indices = []
+  for i in range(len(energies)):
+      if is_topological_state_index(i):
+          topological_state_indices.append(i)
+
+  if len(topological_state_indices) != 4:
+      raise ValueError("incorrect number of topological states")
+
+  for idx in topological_state_indices:
+      energies[idx] = 0
+
+  for j in range(2*fock_size):
+      eigenstates[j, topological_state_indices[0]] = topological_wavefunc_1[j]
+      eigenstates[j, topological_state_indices[1]] = topological_wavefunc_2[j]
+      eigenstates[j, topological_state_indices[2]] = 0
+      eigenstates[j, topological_state_indices[3]] = 0
+
+  print("topological_state_index:", topological_state_indices[0])
+#+end_src
+
+Here we calculate all the matrix elements of the perturbations of interest. This is simply representing the perturbations in the energy eigenstate basis.
+
+#+begin_src python :session perturbation_theory :results output
+  def get_matrix_elements(operator):
+      return eigenstates.T.conj() @ operator @ eigenstates
+  hermitian_perturbation_matrices =\
+      list(map(get_matrix_elements, hermitian_perturbation_ops))
+  non_hermitian_perturbation_matrices =\
+      list(map(get_matrix_elements, non_hermitian_perturbation_ops))
+#+end_src
+
+This is an outdated code block used to find and replace topological states.
+#+begin_src python :session perturbation_theory :results output
+  from functools import cmp_to_key
+
+  # Takes an eigenvalue/eigenstate index and checks if the energy is zero. If so, return the total probability of the state near the artificial boundary. Otherwise return None.
+  def is_topological_state_index(ind):
+      if np.abs(energies[ind]) >= 1e-9:
+          return None
+      state = eigenstates[:, ind]
+      state_up = state[:fock_size]
+      state_down = state[fock_size:]
+      probability_at_end = 0
+      for amplitude in state_up[-10:]:
+          probability_at_end += np.abs(amplitude)**2
+      for amplitude in state_down[-10:]:
+          probability_at_end += np.abs(amplitude)**2
+      return np.real(probability_at_end)
+
+  # Find the indices of the topological states
+  topological_state_indices_and_weights = []
+  for i in range(len(energies)):
+      probability = is_topological_state_index(i)
+      if probability:
+          topological_state_indices_and_weights.append((i, probability))
+
+  if len(topological_state_indices_and_weights) != 4:
+      raise ValueError("incorrect number of topological states")
+
+  # Clean the states localised at the artificial boundary
+  def weight_cmp(pair1, pair2):
+      return pair1[1] - pair2[1]
+  sorted_indices_and_weights =\
+      sorted(topological_state_indices_and_weights, key=cmp_to_key(weight_cmp))
+
+  #print(sorted_indices_and_weights)
+  for i in range(4):
+      ind,prob = sorted_indices_and_weights[i]
+      if i < 2:
+          # Delete the edge part of the state and stretch it out to be unit length
+          state_grow_factor = 1/np.sqrt(1-prob)
+          for j in range(10):
+              eigenstates[fock_size - 10 + j, ind] = 0
+              eigenstates[-10 + j, ind] = 0
+          for j in range(2*fock_size):
+              eigenstates[j, ind] *= state_grow_factor
+          total_prob = 0
+      else:
+          # Delete state
+          for j in range(2*fock_size):
+              eigenstates[j, ind] = 0
+
+  topological_state_index = sorted_indices_and_weights[0][0]
+  print("topological_state_index:", topological_state_index)
+#+end_src
+
+* Perturbation theory
+
+This code block will use the I_n implementation and solution to the unperturbed system to calculate the probability of survival for topological states. It works by creating a lambda for each term in the Dyson series that takes in the magnitudes of the perturbation and returns the numerical value of that term. Then the lambdas can be applied to a range of values.
+
+#+begin_src python :session perturbation_theory :results output
+  def I_n_for_set_of_energy_values(n, T, E_psi, idx_list, num_of_degeneracies):
+      energies_list = [energies[idx] for idx in idx_list]
+      #print(energies_list)
+      if n not in callable_I_n_table:
+          add_order_to_callable_I_n_table(n)
+      return callable_I_n_table[n][num_of_degeneracies](T, E_psi, energies_list)
+
+  def product_of_matrix_elements(perturbation_idx, eigenstate_idx_list, psi_idx):
+      if len(eigenstate_idx_list) == 0:
+          return hermitian_perturbation_matrices[perturbation_idx][psi_idx,psi_idx]
+      product =\
+          hermitian_perturbation_matrices[perturbation_idx][psi_idx,eigenstate_idx_list[0]] * \
+          hermitian_perturbation_matrices[perturbation_idx][eigenstate_idx_list[-1],psi_idx]
+      for i in range(len(eigenstate_idx_list) - 1):
+          product *= hermitian_perturbation_matrices[perturbation_idx]\
+              [eigenstate_idx_list[i],eigenstate_idx_list[i+1]]
+      return product
+
+  def inc_residual_eigenstate_idx_list(idx_list, append_idx):
+      if len(idx_list) == 0:
+          return None
+      if idx_list[-1] == len(energies) - 1:
+          return inc_residual_eigenstate_idx_list(idx_list[:-1], 0)
+      idx_list[-1] += 1
+      if idx_list[-1] == topological_state_indices[0]:
+          idx_list[-1] += len(topological_state_indices)
+      if append_idx != None:
+          idx_list.append(append_idx)
+      return idx_list
+
+  def dyson_term(n, perturbation_idx, psi_idx, T, E_psi):
+      dyson_sum = 0
+      for num_of_degeneracies in range(n):
+          degenerate_set = [psi_idx] * num_of_degeneracies
+          residual_eigenstate_idx_list = [0] * (n - 1 - num_of_degeneracies)
+          while residual_eigenstate_idx_list != None:
+              idx_list = degenerate_set + residual_eigenstate_idx_list
+              product = product_of_matrix_elements(perturbation_idx, idx_list, psi_idx)
+              integral = I_n_for_set_of_energy_values(n, T, E_psi, idx_list, num_of_degeneracies)
+              dyson_sum += product * integral
+              residual_eigenstate_idx_list =\
+                  inc_residual_eigenstate_idx_list(residual_eigenstate_idx_list, None)
+      return (-1j)**n * dyson_sum
+#+end_src
+
+The BIG TEST!
+
+#+begin_src python :session perturbation_theory :results output
+  Amplitude_2= dyson_term(2, 9, topological_state_indices[0], 1, 0)
+  print(Amplitude_2)
+#+end_src
