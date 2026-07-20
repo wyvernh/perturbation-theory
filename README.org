@@ -1,0 +1,5 @@
+#+title: Perturbation Theory
+
+This repository hosts a single Org file containing Python code blocks and some explanatory text. It implements the Dyson series expansion from time independent perturbation theory for perturbations of a Fock state lattice.
+
+** [[file:perturbation_theory.org][The code]]
